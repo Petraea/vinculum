@@ -1,4 +1,9 @@
-a,127.0.0.1:8123,a,b,True
-abra,127.0.0.1:8888,cada,cabba,False
-.*,127.0.0.1:8888,,,True
-[?],127.0.0.1:8888,[?],!,False
+#query,type:from:port,type:dest:port,substitute_from,substitute_to,continue
+#Squelch all MPD signals
+.*,TCP:slab.nurdspace.lan:6600,,,,False
+#Default send to graphite
+.*,TCP:spacenanny.nurdspace.lan:12345,TCP:graphite.nurdspace.lan:2003,(.*),test.\1,True
+#Send any sensor net button presses as 'next' commands to MPD.
+.*?net[.]3[.]P[.]0.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,next,True
+#MPD doesn't like holding connections, so ping to keep it alive.
+.*?net.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,ping,True
