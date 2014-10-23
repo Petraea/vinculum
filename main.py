@@ -25,14 +25,15 @@ class Rule:
         self.fromconnection=None
         self.type=''
         self.host=''
+        self.dir=''
         self.port=''
         self.fromtype=''
         self.fromip=None
-        self.direction=''
+        self.fromdir=''
         self.fromhost=''
         self.fromport=''
-        self.parse_dest()
-        self.parse_from()
+        self.type,self.dir,self.host,self.port = self.parse_dest('to',self.dest)
+        self.fromtype,self.fromdir,self.fromhost,self.fromport = self.parse_dest('from',self.froms)
 
     def __str__(self):
         ret = 'ma:'+str(self.match)
@@ -43,11 +44,12 @@ class Rule:
         ret = ret + ' st:'+str(self.subto)
         ret = ret + ' co:'+str(self.cont)
         ret = ret + ' ty:'+str(self.type)
+        ret = ret + ' di:'+str(self.dir)
         ret = ret + ' ho:'+str(self.host)
         ret = ret + ' ip:'+str(self.ip)
         ret = ret + ' po:'+str(self.port)
         ret = ret + ' ty:'+str(self.fromtype)
-        ret = ret + ' di:'+str(self.direction)
+        ret = ret + ' fd:'+str(self.fromdir)
         ret = ret + ' fh:'+str(self.fromhost)
         ret = ret + ' fi:'+str(self.fromip)
         ret = ret + ' fp:'+str(self.fromport)
@@ -61,50 +63,34 @@ class Rule:
     def got_from_ip(self,addr):
         self.fromip=addr
 
-    def parse_dest(self):
+    def parse_dest(self,version,dest):
         try:
-            parts = self.dest.split(':')
+            parts = dest.split(':')
             if len(parts) <3:
-                self.type= 'TCP'
-                self.host = parts[0]
-                self.port = int(parts[1])
-            else:
-                self.type = parts[0].upper()
-                self.host = parts[1]
-                self.port = int(parts[2])
-            if self.host =='': self.ip=None
-            else: self.reactor.resolve(self.host).addCallback(self.got_dest_ip)
-        except:
-            self.type = None
-            self.host = None
-            self.port = None
-
-    def parse_from(self):
-        try:
-            parts = self.froms.split(':')
-            if len(parts) <3:
-                self.fromtype= 'TCP'
-                self.direction= 'SEND'
-                self.fromhost = parts[0]
-                self.fromport = int(parts[1])
+                type= 'TCP'
+                dir= 'SEND'
+                host = parts[0]
+                port = int(parts[1])
             else:
                 try:
-                    self.fromtype,self.direction = parts[0].split('-')
-                    self.fromtype=self.fromtype.upper()
-                    self.direction=self.direction.upper()
-                    if self.direction != 'LISTEN': self.direction = 'SEND'
+                    type,dir = parts[0].split('-')
+                    type=type.upper()
+                    dir=dir.upper()
+                    if dir != 'LISTEN': dir = 'SEND'
                 except:
-                    self.fromtype = parts[0].upper()
-                    self.direction= 'SEND'
-                self.fromhost = parts[1]
-                self.fromport = int(parts[2])
-            if self.fromhost in ['*','']: self.fromip=None
-            else: self.reactor.resolve(self.fromhost).addCallback(self.got_from_ip)
+                    type = parts[0].upper()
+                    dir= 'SEND'
+                host = parts[1]
+                port = int(parts[2])
+            if version == 'from':
+                if host in ['*','']: self.got_from_ip(None)
+                else: self.reactor.resolve(host).addCallback(self.got_from_ip)
+            elif version == 'to':
+                if host in ['*','']: self.got_dest_ip(None)
+                else: self.reactor.resolve(host).addCallback(self.got_dest_ip)
+            return type, dir, host, port
         except:
-            self.fromtype = None
-            self.direction= None
-            self.fromhost = None
-            self.fromport = None
+            return None, None, None, None
 
 class Rules:
     def __init__(self,reactor):
@@ -117,7 +103,28 @@ class Rules:
         self.read_task.start(10, now=True)
 
     def parse_definition(self, text):
-        parts = text.split(',')
+        parts = ['']
+        n = 0
+        skip = False
+        for l in text:
+            if skip:
+                if l != ',': #mis-skip
+                    parts[n] = parts[n]+chr(92)+l
+                else:
+                    parts[n]+=l
+                skip = False
+                continue
+            if l != ',':
+                if l == chr(92): #Backslash!
+                    skip = True
+                    continue
+                else:
+                    parts[n]+=l
+            else:
+                n = n + 1
+                parts.append('')
+        print (parts)
+#        parts = text.split(',')
         parts = [x.strip() for x in parts]
         if parts[5] in ['True','true','T','1']: cont = True
         else: cont=False
@@ -156,31 +163,38 @@ class Rules:
                     matched=True
             if not matched:
                 lost.append(rule)
-        self.rules = sustained + added
+        self.rules = new_rules[:]
         self.dropConnections(lost)
         self.raiseConnections(added)
 
     def dropConnections(self,lost):
+        deadconnections = set()
         for r in lost:
+            if not any (r.connection == f.connection or r.connection == f.fromconnection for f in self.rules):
+                deadconnections.add(r.connection)
+            if not any (r.fromconnection == f.connection or r.fromconnection == f.fromconnection for f in self.rules):
+                deadconnections.add(r.fromconnection)
+        for c in deadconnections:
             try:
-                r.connection.transport.loseConnection()
-                r.connection.factory.stopTrying()
-                r.fromconnection.transport.loseConnection()
-                r.fromconnection.factory.stopTrying()
+                c.transport.loseConnection()
+                c.factory.stopTrying()
             except:
                 pass
 
     def raiseConnections(self,new_rules):
-        listens = set((x.fromtype,x.direction,x.fromhost,x.fromport) for x in new_rules) # deduplicate!
-        for type,dir,host,port in listens:
+        toraise = set((x.fromtype,x.fromdir,x.fromhost,x.fromport) for x in new_rules)
+        toraise.update(set((x.type,x.dir,x.host,x.port) for x in new_rules))
+        for type,dir,host,port in toraise:
             if host is None: continue
-            if dir != 'LISTEN': continue
             inDir=False
             for entry in self.directory:
-                if entry.direction == 'LISTEN' and entry.type == type and entry._host.port == port:
+                if entry.dir == 'LISTEN' and entry.type == type and entry._host.port == port:
                     entry.bind_rule()
                     inDir=True
-            if not inDir:
+                if entry.dir == 'SEND' and entry._host.host == host and entry.type == type and entry._host.port == port:
+                    entry.bind_rule()
+                    inDir=True
+            if not inDir and dir == 'LISTEN':
                 print ('Listening on port: '+str(type)+':'+str(port))
                 if type == 'TCP':
                     self.reactor.listenTCP(port, VinculumFactory(self.reactor))
@@ -190,18 +204,7 @@ class Rules:
                     self.reactor.listenSSL(port, VinculumFactory(self.reactor))
                 elif type == 'UNIX': #Using fromhost as unix socket address
                     self.reactor.listenUNIX(host, VinculumFactory(self.reactor))
-        dests = set((x.type,x.host,x.port) for x in new_rules) # deduplicate!
-        for x in new_rules: # make listen connections
-            if x.direction != 'LISTEN':
-                dests.add((x.fromtype,x.fromhost,x.fromport))
-        for type,host,port in dests:
-            if host is None: continue
-            inDir=False
-            for entry in self.directory:
-                if entry._host.host == host and entry.type == type and entry._host.port == port:
-                    entry.bind_rule()
-                    inDir=True
-            if not inDir:
+            if not inDir and dir == 'SEND':
                 print ('Connecting to: '+str(type)+':'+str(host)+':'+str(port))
                 if type == 'TCP':
                     self.reactor.connectTCP(host,port,VinculumFactory(self.reactor))
@@ -250,8 +253,8 @@ class VinculumProtocol(LineReceiver):
         self._peer = self.transport.getPeer()
         self._host = self.transport.getHost()
         self.type,dir=[x.upper() for x in str(type(self.transport))[8:-2].split('.')][2:]
-        if dir == 'SERVER':self.direction='LISTEN'
-        else: self.direction='SEND'
+        if dir == 'SERVER':self.dir='LISTEN'
+        else: self.dir='SEND'
         self.rules.add_connection(self)
         self.bind_rule()
         self.drop = LoopingCall(self.transport.loseConnection)
@@ -260,34 +263,38 @@ class VinculumProtocol(LineReceiver):
     def bind_rule(self):
         bound = False
         for r in self.rules.rules:
-            if self._host.port == r.fromport and self.type==r.fromtype and self.direction==r.direction:
-                print ('I am a server for this connection! '+str(r))
+            if self._host.port == r.fromport and self.type==r.fromtype and self.dir==r.fromdir:
+                print (str(self.transport)+': Server for connection (incoming): '+str(r))
                 r.fromconnection=self
                 bound=True
-            if self._peer.port == r.fromport and self.type==r.fromtype and self.direction==r.direction:
-                print ('I am a recieving client for this connection! '+str(r))
+            if self._peer.port == r.fromport and self.type==r.fromtype and self.dir==r.fromdir:
+                print (str(self.transport)+': Recieving client for connection (incoming): '+str(r))
                 r.fromconnection=self
                 bound=True
             elif self._peer.host == r.ip and self._peer.port == r.port and self.type==r.type:
-                print ('I am a client for this connection! '+str(r))
+                print (str(self.transport)+': Sending client for connection (outgoing): '+str(r))
                 r.connection=self
                 bound=True
+            if self._host.port == r.port and self.type==r.type and self.dir==r.dir:
+                print (str(self.transport)+': Server for connection (outgoing): '+str(r))
+                r.fromconnection=self
+                bound=True
         if bound==False:
-            print ('I am unmatched!')
+            print (str(self.transport)+' currently unmatched')
             self.transport.loseConnection()
 
     def connectionLost(self,reason):
         self.rules.del_connection(self)
 
     def lineReceived(self, line):
-        line = line.rstrip('\r')
-        line = line.lstrip('\r')
+        line = line.strip('\r')
         print (time.strftime('%H:%M:%S')+' Received: '+line)
         lines = self.rules.match(line,self._peer.host)
 
 class VinculumFactory(ReconnectingClientFactory):
     def __init__(self,reactor):
         self.reactor=reactor
+        self.maxDelay=30
 
     def buildProtocol(self,addr):
         return VinculumProtocol(reactor,self)
