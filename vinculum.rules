@@ -1,9 +1,35 @@
+######################################
+#Vinculum Rulelist
+#####################################
+#
+#This table is parsed from top to bottom on every incoming message.
+#Each message is checked for its incoming address 'from:port', and then by the
+#regex match 'query'.
+#If it successfully matches, then it will proceed to execute that line.
+#What it proceeds to do when executing is perform a regex based on the
+#'substitute_from', 'substitute_to' fields, and then send it out to destination
+#'dest:port'. Finally, if 'continue' is set to False, execution stops, else
+#The original line is attempted to match against further rules.
+
+#FIELD LIST
 #query,type:from:port,type:dest:port,substitute_from,substitute_to,continue
+#If a substitute field is blank, no sbstitution is made.
+
 #Squelch all MPD signals
 .*,TCP:slab.nurdspace.lan:6600,,,,False
 #Default send to graphite
-.*,TCP:spacenanny.nurdspace.lan:12345,TCP:graphite.nurdspace.lan:2003,(.*),test.\1,True
-#Send any sensor net button presses as 'next' commands to MPD.
-.*?net[.]3[.]P[.]0.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,next,True
+#.*,TCP:spacenanny.nurdspace.lan:12345,TCP:graphite.nurdspace.lan:2003,(.*),test.\1,True
 #MPD doesn't like holding connections, so ping to keep it alive.
 .*?net.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,ping,True
+#Send skipbutton commands to MPD.
+.*?net[.]3[.]P[.]0.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,next,True
+.*?net[.]3[.]P[.]1.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,pause,True
+#.*?net[.]3[.]P[.]2.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:localhost:4444,.*,{"jsonrpc":"2.0"\,"id":"button"\,"method":"channelSetData"\,"params":{"9":"0"}},False
+.*?net[.]3[.]P[.]2.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,volume +10,True
+#.*?net[.]3[.]P[.]3.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:localhost:4444,.*,{"jsonrpc":"2.0"\,"id":"button"\,"method":"channelSetData"\,"params":{"9":"255"}},False
+.*?net[.]3[.]P[.]3.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:slab.nurdspace.lan:6600,.*,volume -10,True
+
+#Spam doorbell presses into IRC
+#.*?net[.]12[.]P[.]0.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:tankstation.nurdspace.lan:16421,.*,#nurds DOORBELL!,True
+#Send sensor values to spaceapi
+.*?net[.].*?[.].*?[.].*?,TCP:spacenanny.nurdspace.lan:12345,TCP:tankstation.nurdspace.lan:55555,.*?net[.](.*?)[.](.*?)[.](.*?) ([^ ]*).*,NRD\1.\2.\3:\4\n\n,True
