@@ -1,3 +1,4 @@
+#!/usr/bin/python
 from twisted.protocols.basic import LineReceiver
 from twisted.internet.protocol import ReconnectingClientFactory
 from os.path import exists, getmtime
@@ -89,7 +90,8 @@ class Rule:
                 if host in ['*','']: self.got_dest_ip(None)
                 else: self.reactor.resolve(host).addCallback(self.got_dest_ip)
             return type, dir, host, port
-        except:
+        except Exception as e:
+            print (e)
             return None, None, None, None
 
 class Rules:
@@ -185,7 +187,6 @@ class Rules:
         toraise = set((x.fromtype,x.fromdir,x.fromhost,x.fromport) for x in new_rules)
         toraise.update(set((x.type,x.dir,x.host,x.port) for x in new_rules))
         for type,dir,host,port in toraise:
-            if host is None: continue
             inDir=False
             for entry in self.directory:
                 if entry.dir == 'LISTEN' and entry.type == type and entry._host.port == port:
@@ -205,6 +206,7 @@ class Rules:
                 elif type == 'UNIX': #Using fromhost as unix socket address
                     self.reactor.listenUNIX(host, VinculumFactory(self.reactor))
             if not inDir and dir == 'SEND':
+                if host is None: continue
                 print ('Connecting to: '+str(type)+':'+str(host)+':'+str(port))
                 if type == 'TCP':
                     self.reactor.connectTCP(host,port,VinculumFactory(self.reactor))
@@ -222,23 +224,24 @@ class Rules:
         if connection in self.directory:
             self.directory.remove(connection)
 
-    def match(self,strn,ip):
+    def match(self,strn,dir,ip,port):
         for rule in self.rules:
             m = rule.mcompile.match(strn)
             if m is not None:
                 if rule.fromip == ip or rule.fromip is None:
-                    print ('matched: '+str(rule.match)+' from '+str(ip))
-                    line = strn
-                    if rule.subfrom != '':
-                        line = re.sub(rule.subfrom,rule.subto,strn)
-                    if rule.connection:
-                        try:
-                            print ('sending: "'+line+'" to '+rule.dest)
-                            rule.connection.sendLine(line)
-                        except Exception as e:
-                            print ('Sending line "'+str(line)+'" to '+rule.dest+' failed.')
-                            print (e)
-                    if not rule.cont: break
+                    if rule.fromport == port:
+                        print ('matched: '+str(rule.match)+' from '+str(ip))
+                        line = strn
+                        if rule.subfrom != '':
+                            line = re.sub(rule.subfrom,rule.subto,strn)
+                        if rule.connection:
+                            try:
+                                print ('sending: "'+line+'" to '+rule.dest)
+                                rule.connection.sendLine(line)
+                            except Exception as e:
+                                print ('Sending line "'+str(line)+'" to '+rule.dest+' failed.')
+                                print (e)
+                        if not rule.cont: break
 
 class VinculumProtocol(LineReceiver):
     delimiter='\n'
@@ -259,6 +262,7 @@ class VinculumProtocol(LineReceiver):
         self.bind_rule()
         self.drop = LoopingCall(self.transport.loseConnection)
         self.drop.start(DROPTIME, now=False)
+        print (self.dir)
 
     def bind_rule(self):
         bound = False
@@ -289,7 +293,10 @@ class VinculumProtocol(LineReceiver):
     def lineReceived(self, line):
         line = line.strip('\r')
         print (time.strftime('%H:%M:%S')+' Received: '+line)
-        lines = self.rules.match(line,self._peer.host)
+        if self.dir == 'SEND':
+            lines = self.rules.match(line,self.dir,self._peer.host, self._peer.port)
+        else:
+            lines = self.rules.match(line,self.dir,self._peer.host, self._host.port)
 
 class VinculumFactory(ReconnectingClientFactory):
     def __init__(self,reactor):

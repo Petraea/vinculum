@@ -15,6 +15,10 @@
 #query,type:from:port,type:dest:port,substitute_from,substitute_to,continue
 #If a substitute field is blank, no sbstitution is made.
 
+#Send out espeak messages (and terminate)
+.*,TCP-LISTEN:*:16016,TCP:slab.nurdspace.lan:16016,,,True
+.*,TCP-LISTEN:*:16016,TCP:smokescreen.nurdspace.lan:16016,,,False
+
 #Squelch all MPD signals
 .*,TCP:slab.nurdspace.lan:6600,,,,False
 #Default send to graphite
@@ -32,4 +36,5 @@
 #Spam doorbell presses into IRC
 #.*?net[.]12[.]P[.]0.*?,TCP:spacenanny.nurdspace.lan:12345,TCP:tankstation.nurdspace.lan:16421,.*,#nurds DOORBELL!,True
 #Send sensor values to spaceapi
-.*?net[.].*?[.].*?[.].*?,TCP:spacenanny.nurdspace.lan:12345,TCP:tankstation.nurdspace.lan:55555,.*?net[.](.*?)[.](.*?)[.](.*?) ([^ ]*).*,NRD\1.\2.\3:\4\n\n,True
+.*?net[.].*?[.].*?[.].*?,TCP:spacenanny.nurdspace.lan:12345,TCP:tankstation.nurdspace.lan:55555,.*?net[.](.*?)[.](.*?)[.](.*?) ([^ ]*).*,NRD\1.\2.\3:\4\n\n,False
+
