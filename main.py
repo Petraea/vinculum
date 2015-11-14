@@ -8,7 +8,10 @@ from twisted.internet import reactor
 import re
 import time
 
-RULESFILE='vinculum.rules'
+import os
+mydir=os.path.dirname(os.path.realpath(__file__))
+
+RULESFILE=mydir+os.sep+'vinculum.rules'
 DROPTIME = 999999
 
 class Rule:
@@ -125,7 +128,7 @@ class Rules:
             else:
                 n = n + 1
                 parts.append('')
-        print (parts)
+#        print (parts)
 #        parts = text.split(',')
         parts = [x.strip() for x in parts]
         if parts[5] in ['True','true','T','1']: cont = True
@@ -251,6 +254,7 @@ class VinculumProtocol(LineReceiver):
         self.rules = reactor.rules
         self._peer = None
         self._host = None
+        self.bound=False
 
     def connectionMade(self):
         self._peer = self.transport.getPeer()
@@ -262,32 +266,32 @@ class VinculumProtocol(LineReceiver):
         self.bind_rule()
         self.drop = LoopingCall(self.transport.loseConnection)
         self.drop.start(DROPTIME, now=False)
-        print (self.dir)
 
     def bind_rule(self):
-        bound = False
         for r in self.rules.rules:
             if self._host.port == r.fromport and self.type==r.fromtype and self.dir==r.fromdir:
                 print (str(self.transport)+': Server for connection (incoming): '+str(r))
                 r.fromconnection=self
-                bound=True
+                self.bound=True
             if self._peer.port == r.fromport and self.type==r.fromtype and self.dir==r.fromdir:
                 print (str(self.transport)+': Recieving client for connection (incoming): '+str(r))
                 r.fromconnection=self
-                bound=True
+                self.bound=True
             elif self._peer.host == r.ip and self._peer.port == r.port and self.type==r.type:
                 print (str(self.transport)+': Sending client for connection (outgoing): '+str(r))
                 r.connection=self
-                bound=True
+                self.bound=True
             if self._host.port == r.port and self.type==r.type and self.dir==r.dir:
                 print (str(self.transport)+': Server for connection (outgoing): '+str(r))
                 r.fromconnection=self
-                bound=True
-        if bound==False:
+                self.bound=True
+        if self.bound==False:
             print (str(self.transport)+' currently unmatched')
             self.transport.loseConnection()
 
     def connectionLost(self,reason):
+        print(self._LineReceiver__buffer)
+        self.lineReceived(self._LineReceiver__buffer)
         self.rules.del_connection(self)
 
     def lineReceived(self, line):
@@ -308,4 +312,5 @@ class VinculumFactory(ReconnectingClientFactory):
 
 reactor.rules = Rules(reactor)
 reactor.run()
+
 
