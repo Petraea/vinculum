@@ -290,8 +290,8 @@ class VinculumProtocol(LineReceiver):
             self.transport.loseConnection()
 
     def connectionLost(self,reason):
-        print(self._LineReceiver__buffer)
-        self.lineReceived(self._LineReceiver__buffer)
+        if len(self._LineReceiver__buffer)>0:
+            self.lineReceived(self._LineReceiver__buffer)
         self.rules.del_connection(self)
 
     def lineReceived(self, line):
