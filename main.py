@@ -7,14 +7,17 @@ from twisted.internet.task import LoopingCall
 from twisted.internet import reactor
 import re
 import time
+import logging
 
 import os
 mydir=os.path.dirname(os.path.realpath(__file__))
-
 RULESFILE=mydir+os.sep+'vinculum.rules'
+logging.basicConfig(filename=mydir+os.sep+'vinculum.log',level=logging.DEBUG)
+
 DROPTIME = 999999
 
 class Rule:
+    '''This class is instantiated for each rule in the rulebook. It contains all the needed variables, included the compiled regex matcher for speed.'''
     def __init__(self,reactor,match,froms,dest,subfrom,subto,cont):
         self.reactor=reactor
         self.match='' or match
@@ -38,6 +41,17 @@ class Rule:
         self.fromport=''
         self.type,self.dir,self.host,self.port = self.parse_dest('to',self.dest)
         self.fromtype,self.fromdir,self.fromhost,self.fromport = self.parse_dest('from',self.froms)
+
+    def __eq__(self, other):
+        '''Compare rules based on their defining characteristics, not derived info.'''
+        if type(other) != type(self): return False #Only match other rules.
+        if self.match!=other.match: return False
+        if self.froms!=other.froms: return False
+        if self.dest!=other.dest: return False
+        if self.subfrom!=other.subfrom: return False
+        if self.subto!=other.subto: return False
+        if self.cont!=other.cont: return False
+        return True
 
     def __str__(self):
         ret = 'ma:'+str(self.match)
@@ -94,10 +108,11 @@ class Rule:
                 else: self.reactor.resolve(host).addCallback(self.got_dest_ip)
             return type, dir, host, port
         except Exception as e:
-            print (e)
+            logging.warning(e)
             return None, None, None, None
 
 class Rules:
+    '''This is the single class that contains all the rules. It is referenced by the reactor, and that is used to pass it through to the line reciever.'''
     def __init__(self,reactor):
         self.reactor=reactor
         self.rules=[]
@@ -108,6 +123,7 @@ class Rules:
         self.read_task.start(10, now=True)
 
     def parse_definition(self, text):
+        '''Parse each line of the rulebook for what it represents.'''
         parts = ['']
         n = 0
         skip = False
@@ -128,17 +144,17 @@ class Rules:
             else:
                 n = n + 1
                 parts.append('')
-#        print (parts)
-#        parts = text.split(',')
         parts = [x.strip() for x in parts]
         if parts[5] in ['True','true','T','1']: cont = True
         else: cont=False
         return Rule(self.reactor,parts[0],parts[1],parts[2],parts[3],parts[4],cont)
 
     def read_rules(self):
+        '''On a timer loop, check the rules file for changes. If it's changed, update
+        the working rules with new ones, only making the differences happen.'''
         if not exists(self.rules_file):
             self.rules=[]
-            print ('No rules file present!')
+            logging.error('No rules file present!')
             return
         try:
             mtime = getmtime(self.rules_file)
@@ -152,7 +168,7 @@ class Rules:
             if line.startswith('#') or not line:
                 continue
             rule = self.parse_definition(line)
-            print ('Adding rule '+str(rule))
+            logging.warning('Adding rule '+str(rule))
             new_rules.append(rule)
         self.rules_last_read = mtime
 
@@ -162,7 +178,8 @@ class Rules:
         for rule in self.rules:
             matched=False
             for nrule in new_rules:
-                if rule.match==nrule.match and rule.froms==nrule.froms and rule.dest==nrule.dest and rule.subfrom==nrule.subfrom and rule.subto==nrule.subto and rule.cont==nrule.cont:
+#                if rule.match==nrule.match and rule.froms==nrule.froms and rule.dest==nrule.dest and rule.subfrom==nrule.subfrom and rule.subto==nrule.subto and rule.cont==nrule.cont:
+                if rule != nrule:
                     sustained.append(rule)
                     added.remove(nrule)
                     matched=True
@@ -173,6 +190,7 @@ class Rules:
         self.raiseConnections(added)
 
     def dropConnections(self,lost):
+        '''For all of the provided rules, if any of the connections don't exist anywhere else in the rulebook, drop the connection.'''
         deadconnections = set()
         for r in lost:
             if not any (r.connection == f.connection or r.connection == f.fromconnection for f in self.rules):
@@ -187,6 +205,8 @@ class Rules:
                 pass
 
     def raiseConnections(self,new_rules):
+        '''If the connection doesn't already exist in the rules, try and form a new connection from these rules,
+        otherwise bind the old connection to the new rule.'''
         toraise = set((x.fromtype,x.fromdir,x.fromhost,x.fromport) for x in new_rules)
         toraise.update(set((x.type,x.dir,x.host,x.port) for x in new_rules))
         for type,dir,host,port in toraise:
@@ -199,7 +219,7 @@ class Rules:
                     entry.bind_rule()
                     inDir=True
             if not inDir and dir == 'LISTEN':
-                print ('Listening on port: '+str(type)+':'+str(port))
+                logging.warning('Listening on port: '+str(type)+':'+str(port))
                 if type == 'TCP':
                     self.reactor.listenTCP(port, VinculumFactory(self.reactor))
                 elif type == 'UDP':
@@ -210,7 +230,7 @@ class Rules:
                     self.reactor.listenUNIX(host, VinculumFactory(self.reactor))
             if not inDir and dir == 'SEND':
                 if host is None: continue
-                print ('Connecting to: '+str(type)+':'+str(host)+':'+str(port))
+                logging.warning('Connecting to: '+str(type)+':'+str(host)+':'+str(port))
                 if type == 'TCP':
                     self.reactor.connectTCP(host,port,VinculumFactory(self.reactor))
 #                elif type == 'UDP': #Yow!
@@ -228,25 +248,27 @@ class Rules:
             self.directory.remove(connection)
 
     def match(self,strn,dir,ip,port):
+        '''Main workhorse function. Each new string sent in, match based on the entire rulebook based on IP, string, port.'''
         for rule in self.rules:
             if rule.fromip == ip or rule.fromip is None:
                 if rule.fromport == port:
                     m = rule.mcompile.match(strn)
                     if m is not None:
-                        print ('matched: '+str(rule.match)+' from '+str(ip))
+                        logging.info('matched: '+str(rule.match)+' from '+str(ip))
                         line = strn
                         if rule.subfrom != '':
                             line = re.sub(rule.subfrom,rule.subto,strn)
                         if rule.connection:
                             try:
-                                print ('sending: "'+line+'" to '+rule.dest)
+                                logging.info('sending: "'+line+'" to '+rule.dest)
                                 rule.connection.sendLine(line)
                             except Exception as e:
-                                print ('Sending line "'+str(line)+'" to '+rule.dest+' failed.')
-                                print (e)
+                                logging.error('Sending line "'+str(line)+'" to '+rule.dest+' failed.')
+                                logging.error(e)
                         if not rule.cont: break
 
 class VinculumProtocol(LineReceiver):
+    '''This is a custom Protocol that provides both Server and Client functionality in as many languages as possible.'''
     delimiter='\n'
     def __init__(self,reactor,factory):
         self.reactor=reactor
@@ -270,23 +292,23 @@ class VinculumProtocol(LineReceiver):
     def bind_rule(self):
         for r in self.rules.rules:
             if self._host.port == r.fromport and self.type==r.fromtype and self.dir==r.fromdir:
-                print (str(self.transport)+': Server for connection (incoming): '+str(r))
+                logging.info(str(self.transport)+': Server for connection (incoming): '+str(r))
                 r.fromconnection=self
                 self.bound=True
             if self._peer.port == r.fromport and self.type==r.fromtype and self.dir==r.fromdir:
-                print (str(self.transport)+': Recieving client for connection (incoming): '+str(r))
+                logging.info(str(self.transport)+': Recieving client for connection (incoming): '+str(r))
                 r.fromconnection=self
                 self.bound=True
             elif self._peer.host == r.ip and self._peer.port == r.port and self.type==r.type:
-                print (str(self.transport)+': Sending client for connection (outgoing): '+str(r))
+                logging.info(str(self.transport)+': Sending client for connection (outgoing): '+str(r))
                 r.connection=self
                 self.bound=True
             if self._host.port == r.port and self.type==r.type and self.dir==r.dir:
-                print (str(self.transport)+': Server for connection (outgoing): '+str(r))
+                logging.info(str(self.transport)+': Server for connection (outgoing): '+str(r))
                 r.fromconnection=self
                 self.bound=True
         if self.bound==False:
-            print (str(self.transport)+' currently unmatched')
+            logging.warning(str(self.transport)+' currently unmatched')
             self.transport.loseConnection()
 
     def connectionLost(self,reason):
@@ -296,7 +318,7 @@ class VinculumProtocol(LineReceiver):
 
     def lineReceived(self, line):
         line = line.strip('\r')
-        print (time.strftime('%H:%M:%S')+' Received: '+line)
+        logging.info(time.strftime('%H:%M:%S')+' Received: '+line)
         if self.dir == 'SEND':
             lines = self.rules.match(line,self.dir,self._peer.host, self._peer.port)
         else:
