@@ -229,10 +229,10 @@ class Rules:
 
     def match(self,strn,dir,ip,port):
         for rule in self.rules:
-            m = rule.mcompile.match(strn)
-            if m is not None:
-                if rule.fromip == ip or rule.fromip is None:
-                    if rule.fromport == port:
+            if rule.fromip == ip or rule.fromip is None:
+                if rule.fromport == port:
+                    m = rule.mcompile.match(strn)
+                    if m is not None:
                         print ('matched: '+str(rule.match)+' from '+str(ip))
                         line = strn
                         if rule.subfrom != '':
